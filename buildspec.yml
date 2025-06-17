@@ -7,21 +7,29 @@ env:
     ACCOUNT_ID: 207567798584
     FRONTEND_REPO: 3-tier-frontend
     BACKEND_REPO: 3-tier-backend
-    IMAGE_TAG: v1.$CODEBUILD_BUILD_NUMBER
 
 phases:
+  install:
+    runtime-versions:
+      docker: 20
+    commands:
+      - echo Skipping kubectl install, assuming it exists in the build environment
+
   pre_build:
     commands:
       - echo Logging in to Amazon ECR...
-      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
-      - echo Updating kubeconfig for cluster...
-      - aws eks update-kubeconfig --region $REGION --name $CLUSTER_NAME
+      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+      - echo Updating kubeconfig...
+      - aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
 
   build:
     commands:
+      - IMAGE_TAG=v1.${CODEBUILD_BUILD_NUMBER}
+      - echo "Using image tag: $IMAGE_TAG"
       - echo Building frontend Docker image...
       - docker build -t $FRONTEND_REPO:$IMAGE_TAG ./frontend
       - docker tag $FRONTEND_REPO:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO:$IMAGE_TAG
+
       - echo Building backend Docker image...
       - docker build -t $BACKEND_REPO:$IMAGE_TAG ./backend
       - docker tag $BACKEND_REPO:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO:$IMAGE_TAG
@@ -33,11 +41,7 @@ phases:
       - echo Pushing backend image to ECR...
       - docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO:$IMAGE_TAG
 
-      - echo Substituting image tags in manifests...
-      - sed -i "s|IMAGE_PLACEHOLDER_FRONTEND|$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO:$IMAGE_TAG|g" k8s_manifests/frontend-deployment.yaml
-      - sed -i "s|IMAGE_PLACEHOLDER_BACKEND|$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO:$IMAGE_TAG|g" k8s_manifests/backend-deployment.yaml
-
-      - echo Applying all Kubernetes manifests...
+      - echo Applying Kubernetes manifests...
       - kubectl apply -f k8s_manifests/mongo/
       - kubectl apply -f k8s_manifests/backend-deployment.yaml
       - kubectl apply -f k8s_manifests/backend-service.yaml
