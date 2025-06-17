@@ -10,9 +10,6 @@ env:
     IMAGE_TAG: v1.$CODEBUILD_BUILD_NUMBER
 
 phases:
-  install:
-    runtime-versions:
-      docker: 20
     commands:
       - echo Skipping kubectl install, assuming it's preinstalled
       - echo Installing utilities...
