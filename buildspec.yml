@@ -19,6 +19,7 @@ phases:
 
   pre_build:
     commands:
+      - aws sts get-caller-identity
       - echo Setting dynamic image tag...
       - export IMAGE_TAG=v1.${CODEBUILD_BUILD_NUMBER}
 
