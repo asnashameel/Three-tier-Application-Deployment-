@@ -11,11 +11,12 @@ env:
 phases:
   install:
     commands:
-      - echo "Docker is already installed in standard CodeBuild images."
+      - echo "Using standard Docker CodeBuild image"
+      # No need to install kubectl if using aws/codebuild/standard:7.0
 
   pre_build:
     commands:
-      - echo Logging in to Amazon ECR...
+      - echo Logging into ECR...
       - IMAGE_TAG=v1.$CODEBUILD_BUILD_NUMBER
       - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
       - echo Updating kubeconfig...
@@ -39,10 +40,15 @@ phases:
       - echo Pushing backend image...
       - docker push ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${BACKEND_REPO}:${IMAGE_TAG}
 
-      - echo Applying Kubernetes manifests...
-      - kubectl apply -f k8s_manifests/mongo/
-      - kubectl apply -f k8s_manifests/
+      - echo Preparing Kubernetes manifests...
+      - mkdir -p k8s-out
+      - cp k8s_manifests/*.yaml k8s-out/ || true
+      - cp k8s_manifests/mongo/*.yaml k8s-out/ || true
+
+      - echo Applying manifests to EKS...
+      - kubectl apply -f k8s-out/
 
 artifacts:
+  base-directory: k8s-out
   files:
-    - '**/*'
+    - '*.yaml'
