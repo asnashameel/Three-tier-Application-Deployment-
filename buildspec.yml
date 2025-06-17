@@ -15,7 +15,7 @@ phases:
   install:
     commands:
       - echo "Using standard Docker CodeBuild image"
-      # Assuming aws/codebuild/standard:7.0+ already includes Docker & kubectl
+      # AWS CodeBuild standard image already has Docker, kubectl
 
   pre_build:
     commands:
@@ -49,9 +49,14 @@ phases:
       - echo Preparing Kubernetes manifest output directory...
       - mkdir -p k8s-out
 
-      - echo Copying Kubernetes YAML files...
-      - cp $K8S_MANIFEST_DIR/*.yaml k8s-out/ || true
-      - cp $K8S_MANIFEST_DIR/mongo/*.yaml k8s-out/ || true
+      - echo Injecting image URIs into deployment manifests...
+      - sed "s|IMAGE_PLACEHOLDER|${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${FRONTEND_REPO}:${IMAGE_TAG}|g" $K8S_MANIFEST_DIR/frontend-deployment.yaml > k8s-out/frontend-deployment.yaml
+      - sed "s|IMAGE_PLACEHOLDER|${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${BACKEND_REPO}:${IMAGE_TAG}|g" $K8S_MANIFEST_DIR/backend-deployment.yaml > k8s-out/backend-deployment.yaml
+
+      - cp $K8S_MANIFEST_DIR/frontend-service.yaml k8s-out/
+      - cp $K8S_MANIFEST_DIR/backend-service.yaml k8s-out/
+      - cp $K8S_MANIFEST_DIR/full_stack_lb.yaml k8s-out/
+      - cp $K8S_MANIFEST_DIR/mongo/*.yaml k8s-out/
 
       - echo "Final list of generated Kubernetes YAML files:"
       - find k8s-out/
