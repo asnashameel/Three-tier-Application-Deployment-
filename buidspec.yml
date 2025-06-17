@@ -7,44 +7,60 @@ env:
     ACCOUNT_ID: 207567798584
     FRONTEND_REPO: 3-tier-frontend
     BACKEND_REPO: 3-tier-backend
+    FRONTEND_DIR: frontend
+    BACKEND_DIR: backend
+    K8S_MANIFEST_DIR: k8s_manifests
 
 phases:
   install:
     commands:
       - echo "Using standard Docker CodeBuild image"
-      # No need to install kubectl if using aws/codebuild/standard:7.0
+      # Assuming aws/codebuild/standard:7.0+ already includes Docker & kubectl
 
   pre_build:
     commands:
-      - echo Logging into ECR...
-      - IMAGE_TAG=v1.$CODEBUILD_BUILD_NUMBER
+      - echo Setting dynamic image tag...
+      - export IMAGE_TAG=v1.${CODEBUILD_BUILD_NUMBER}
+
+      - echo Logging into Amazon ECR...
       - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
-      - echo Updating kubeconfig...
+
+      - echo Updating kubeconfig for EKS cluster...
       - aws eks update-kubeconfig --region $REGION --name $CLUSTER_NAME
 
   build:
     commands:
-      - echo Building frontend image...
-      - docker build -t ${FRONTEND_REPO}:${IMAGE_TAG} ./frontend
+      - echo Building frontend Docker image...
+      - docker build -t ${FRONTEND_REPO}:${IMAGE_TAG} ${FRONTEND_DIR}
       - docker tag ${FRONTEND_REPO}:${IMAGE_TAG} ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${FRONTEND_REPO}:${IMAGE_TAG}
 
-      - echo Building backend image...
-      - docker build -t ${BACKEND_REPO}:${IMAGE_TAG} ./backend
+      - echo Building backend Docker image...
+      - docker build -t ${BACKEND_REPO}:${IMAGE_TAG} ${BACKEND_DIR}
       - docker tag ${BACKEND_REPO}:${IMAGE_TAG} ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${BACKEND_REPO}:${IMAGE_TAG}
 
   post_build:
     commands:
-      - echo Pushing frontend image...
+      - echo Pushing frontend image to ECR...
       - docker push ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${FRONTEND_REPO}:${IMAGE_TAG}
 
-      - echo Pushing backend image...
+      - echo Pushing backend image to ECR...
       - docker push ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${BACKEND_REPO}:${IMAGE_TAG}
 
-      - echo Preparing Kubernetes manifests...
+      - echo Preparing Kubernetes manifest output directory...
       - mkdir -p k8s-out
-      - cp k8s_manifests/*.yaml k8s-out/ || true
-      - cp k8s_manifests/mongo/*.yaml k8s-out/ || true
+
+      - echo Copying Kubernetes YAML files...
+      - cp $K8S_MANIFEST_DIR/*.yaml k8s-out/ || true
+      - cp $K8S_MANIFEST_DIR/mongo/*.yaml k8s-out/ || true
+
+      - echo "Final list of generated Kubernetes YAML files:"
+      - find k8s-out/
+
 artifacts:
   base-directory: k8s-out
+  discard-paths: yes
   files:
-    - '*.yaml'
+    - '**/*.yaml'
+
+cache:
+  paths: []
