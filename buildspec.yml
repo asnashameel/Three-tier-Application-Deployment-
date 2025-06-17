@@ -7,7 +7,7 @@ env:
     ACCOUNT_ID: 207567798584
     FRONTEND_REPO: 3-tier-frontend
     BACKEND_REPO: 3-tier-backend
-    IMAGE_TAG: v1.$CODEBUILD_BUILD_NUMBER
+    IMAGE_TAG: "v1.$CODEBUILD_BUILD_NUMBER"
 
 phases:
     commands:
