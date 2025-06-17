@@ -7,13 +7,13 @@ env:
     ACCOUNT_ID: 207567798584
     FRONTEND_REPO: 3-tier-frontend
     BACKEND_REPO: 3-tier-backend
-    IMAGE_TAG: "v1.$CODEBUILD_BUILD_NUMBER"
 
 phases:
     commands:
+      - aws sts get-caller-identity
       - echo Skipping kubectl install, assuming it's preinstalled
       - echo Installing utilities...
-      - yum install -y jq
+      - IMAGE_TAG=v1.$CODEBUILD_BUILD_NUMBER
 
   pre_build:
     commands:
