@@ -1,0 +1,34 @@
+version: 0.2
+
+env:
+  variables:
+    CLUSTER_NAME: three-tier-cluster
+    REGION: us-east-1
+    BACKEND_IMAGE: 207567798584.dkr.ecr.us-east-1.amazonaws.com/new-backend-image:latest
+    FRONTEND_IMAGE: 207567798584.dkr.ecr.us-east-1.amazonaws.com/new-frontend-image:latest
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin 207567798584.dkr.ecr.us-east-1.amazonaws.com
+      - echo Updating kubeconfig...
+      - aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
+      - echo Substituting image names...
+      - sed -i "s|image: .*backend.*|image: $BACKEND_IMAGE|" k8s_manifests/backend-deployment.yaml
+      - sed -i "s|image: .*frontend.*|image: $FRONTEND_IMAGE|" k8s_manifests/frontend-deployment.yaml
+
+  build:
+    commands:
+      - echo No build step needed
+
+  post_build:
+    commands:
+      - echo Applying Kubernetes manifests...
+      - kubectl apply -f k8s_manifests/
+      - kubectl rollout status deployment/backend -n workshop
+      - kubectl rollout status deployment/frontend -n workshop
+
+artifacts:
+  files:
+    - "**/*"

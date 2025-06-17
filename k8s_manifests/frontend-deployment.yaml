@@ -23,10 +23,10 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: public.ecr.aws/l0l7e4u1/3-tier-frontend:latest
+        image: 207567798584.dkr.ecr.us-east-1.amazonaws.com/3-tier-frontend:latest
         imagePullPolicy: Always
         env:
           - name: REACT_APP_BACKEND_URL
-            value: "backend:8080" # assuming backend service is on port 8080
+            value: "http://k8s-workshop-mainlb-238e7e683a-2073739017.us-east-1.elb.amazonaws.com/api/tasks" # assuming backend service is on port 8080
         ports:
         - containerPort: 3000

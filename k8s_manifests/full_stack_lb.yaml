@@ -10,10 +10,10 @@ metadata:
 spec:
   ingressClassName: alb
   rules:
-    - host: 
+    - host:
       http:
         paths:
-          - path: /backend
+          - path: /api
             pathType: Prefix
             backend:
               service:
