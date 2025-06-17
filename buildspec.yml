@@ -4,31 +4,54 @@ env:
   variables:
     CLUSTER_NAME: three-tier-cluster
     REGION: us-east-1
-    BACKEND_IMAGE: 207567798584.dkr.ecr.us-east-1.amazonaws.com/new-backend-image:latest
-    FRONTEND_IMAGE: 207567798584.dkr.ecr.us-east-1.amazonaws.com/new-frontend-image:latest
+    ACCOUNT_ID: 207567798584
+    BACKEND_IMAGE: 3-tier-backend
+    FRONTEND_IMAGE: 3-tier-frontend
+    BACKEND_TAG: latest
+    FRONTEND_TAG: latest
 
 phases:
+  install:
+    runtime-versions:
+      docker: 20
+      python: 3.x
+    commands:
+      - echo Installing kubectl...
+      - curl -o kubectl https://s3.us-east-1.amazonaws.com/amazon-eks/1.21.2/2021-07-05/bin/linux/amd64/kubectl
+      - chmod +x kubectl && mv kubectl /usr/local/bin/
+      - echo Installing AWS CLI v2...
+      - apt-get update && apt-get install -y unzip
+      - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      - unzip awscliv2.zip && ./aws/install
+
   pre_build:
     commands:
       - echo Logging in to Amazon ECR...
-      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin 207567798584.dkr.ecr.us-east-1.amazonaws.com
+      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
       - echo Updating kubeconfig...
       - aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
-      - echo Substituting image names...
-      - 'sed -i "s|image: .*backend.*|image: $BACKEND_IMAGE|" k8s_manifests/backend-deployment.yaml'
-      - 'sed -i "s|image: .*frontend.*|image: $FRONTEND_IMAGE|" k8s_manifests/frontend-deployment.yaml'
 
   build:
     commands:
-      - echo No build step needed
+      - echo Building Docker images...
+      - docker build -t $BACKEND_IMAGE ./backend
+      - docker tag $BACKEND_IMAGE:latest $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_IMAGE:$BACKEND_TAG
+      - docker build -t $FRONTEND_IMAGE ./frontend
+      - docker tag $FRONTEND_IMAGE:latest $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_IMAGE:$FRONTEND_TAG
+      - echo Pushing Docker images to ECR...
+      - docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_IMAGE:$BACKEND_TAG
+      - docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_IMAGE:$FRONTEND_TAG
 
   post_build:
     commands:
-      - echo Applying Kubernetes manifests...
-      - kubectl apply -f k8s_manifests/
-      - kubectl rollout status deployment/backend -n workshop
-      - kubectl rollout status deployment/frontend -n workshop
+      - echo Deploying to EKS...
+      - kubectl apply -f k8s_manifests/mongo/
+      - kubectl apply -f k8s_manifests/backend-deployment.yaml
+      - kubectl apply -f k8s_manifests/backend-service.yaml
+      - kubectl apply -f k8s_manifests/frontend-deployment.yaml
+      - kubectl apply -f k8s_manifests/frontend-service.yaml
+      - kubectl apply -f k8s_manifests/full_stack_lb.yaml
 
 artifacts:
   files:
-    - "**/*"
+    - '**/*'
