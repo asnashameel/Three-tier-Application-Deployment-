@@ -13,7 +13,7 @@ phases:
     runtime-versions:
       docker: 20
     commands:
-      - echo Skipping kubectl install, assuming it exists in the build environment
+      - echo Skipping kubectl install because it is pre-installed
 
   pre_build:
     commands:
@@ -21,16 +21,16 @@ phases:
       - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
       - echo Updating kubeconfig...
       - aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
+      - export IMAGE_TAG=v1.$CODEBUILD_BUILD_NUMBER
+      - echo Image tag set to $IMAGE_TAG
 
   build:
     commands:
-      - IMAGE_TAG=v1.${CODEBUILD_BUILD_NUMBER}
-      - echo "Using image tag: $IMAGE_TAG"
-      - echo Building frontend Docker image...
+      - echo Building and tagging frontend image...
       - docker build -t $FRONTEND_REPO:$IMAGE_TAG ./frontend
       - docker tag $FRONTEND_REPO:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO:$IMAGE_TAG
 
-      - echo Building backend Docker image...
+      - echo Building and tagging backend image...
       - docker build -t $BACKEND_REPO:$IMAGE_TAG ./backend
       - docker tag $BACKEND_REPO:$IMAGE_TAG $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO:$IMAGE_TAG
 
@@ -38,10 +38,11 @@ phases:
     commands:
       - echo Pushing frontend image to ECR...
       - docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$FRONTEND_REPO:$IMAGE_TAG
+
       - echo Pushing backend image to ECR...
       - docker push $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$BACKEND_REPO:$IMAGE_TAG
 
-      - echo Applying Kubernetes manifests...
+      - echo Deploying to EKS...
       - kubectl apply -f k8s_manifests/mongo/
       - kubectl apply -f k8s_manifests/backend-deployment.yaml
       - kubectl apply -f k8s_manifests/backend-service.yaml
