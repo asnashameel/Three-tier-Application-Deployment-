@@ -44,10 +44,6 @@ phases:
       - mkdir -p k8s-out
       - cp k8s_manifests/*.yaml k8s-out/ || true
       - cp k8s_manifests/mongo/*.yaml k8s-out/ || true
-
-      - echo Applying manifests to EKS...
-      - kubectl apply -f k8s-out/
-
 artifacts:
   base-directory: k8s-out
   files:
