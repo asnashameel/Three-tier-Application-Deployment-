@@ -9,10 +9,6 @@ env:
     BACKEND_REPO: 3-tier-backend
 
 phases:
-  install:
-    commands:
-      - echo Skipping kubectl install because it's pre-installed in image
-
   pre_build:
     commands:
       - echo Logging into Amazon ECR...
