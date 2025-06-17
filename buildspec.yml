@@ -15,8 +15,8 @@ phases:
       - echo Updating kubeconfig...
       - aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
       - echo Substituting image names...
-      - sed -i "s|image: .*backend.*|image: $BACKEND_IMAGE|" k8s_manifests/backend-deployment.yaml
-      - sed -i "s|image: .*frontend.*|image: $FRONTEND_IMAGE|" k8s_manifests/frontend-deployment.yaml
+      - 'sed -i "s|image: .*backend.*|image: $BACKEND_IMAGE|" k8s_manifests/backend-deployment.yaml'
+      - 'sed -i "s|image: .*frontend.*|image: $FRONTEND_IMAGE|" k8s_manifests/frontend-deployment.yaml'
 
   build:
     commands:
