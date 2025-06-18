@@ -191,7 +191,7 @@ Resources:
       AmiType: AL2_x86_64
       DiskSize: 20
       RemoteAccess:
-        Ec2SshKey: "your-key-pair"
+        Ec2SshKey: "asna-nv.pem"
       Tags:
         Name: !Sub "${ClusterName}-nodegroup"
 
