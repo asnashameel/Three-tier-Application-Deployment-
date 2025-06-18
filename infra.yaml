@@ -1,34 +1,63 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Three Tier Architecture with VPC, Subnets, NAT, IGW, Route Tables, Security Groups, IAM, EKS Cluster, and NodeGroup
+
+Description: Three Tier Architecture with VPC, Subnets, NAT, IGW, Route Tables, Security Groups, IAM, EKS Cluster, NodeGroup, and aws-auth ConfigMap for multi-user access
 
 Parameters:
   VpcCIDR:
     Type: String
     Default: 10.0.0.0/16
+
   PublicSubnet1CIDR:
     Type: String
     Default: 10.0.1.0/24
+
   PublicSubnet2CIDR:
     Type: String
     Default: 10.0.2.0/24
+
   PrivateSubnet1CIDR:
     Type: String
     Default: 10.0.3.0/24
+
   PrivateSubnet2CIDR:
     Type: String
     Default: 10.0.4.0/24
+
   ClusterName:
     Type: String
     Default: my-eks-cluster
+
   KubernetesVersion:
     Type: String
-    Default: 1.32
+    Default: 1.30 # Changed from 1.32 to a stable version
+
   NumberOfWorkerNodes:
     Type: Number
     Default: 2
+
   WorkerNodesInstanceType:
     Type: String
     Default: t3.medium
+
+  EC2InstanceRoleArn:
+    Type: String
+    Description: "ARN of the EC2 instance role that needs access to EKS (optional)"
+    Default: ""
+
+  AdditionalUserArn:
+    Type: String
+    Description: "ARN of additional IAM user that needs access to EKS (optional)"
+    Default: ""
+
+  AdminRoleArn:
+    Type: String
+    Description: "ARN of admin role that needs access to EKS (optional)"
+    Default: ""
+
+Conditions:
+  HasEC2Role: !Not [!Equals [!Ref EC2InstanceRoleArn, ""]]
+  HasAdditionalUser: !Not [!Equals [!Ref AdditionalUserArn, ""]]
+  HasAdminRole: !Not [!Equals [!Ref AdminRoleArn, ""]]
 
 Resources:
 
@@ -159,7 +188,7 @@ Resources:
   EksRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: my.eks.cluster.role
+      RoleName: !Sub "${ClusterName}-cluster-role-${AWS::AccountId}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -174,7 +203,7 @@ Resources:
   EksNodeRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: my.eks.node.role
+      RoleName: !Sub "${ClusterName}-node-role-${AWS::AccountId}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -188,6 +217,29 @@ Resources:
         - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
         - "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
 
+  EksConfigLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EKSConfigPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                  - eks:UpdateClusterConfig
+                Resource: !Sub "arn:aws:eks:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}"
+
   EksCluster:
     Type: AWS::EKS::Cluster
     Properties:
@@ -198,8 +250,17 @@ Resources:
         SubnetIds:
           - !Ref PrivateSubnet1
           - !Ref PrivateSubnet2
-        EndpointPrivateAccess: false
+          - !Ref PublicSubnet1
+          - !Ref PublicSubnet2
+        EndpointPrivateAccess: true
         EndpointPublicAccess: true
+        PublicAccessCidrs:
+          - "0.0.0.0/0"
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: api
+            - Type: audit
 
   EksNodeGroup:
     Type: AWS::EKS::Nodegroup
@@ -217,15 +278,154 @@ Resources:
       InstanceTypes:
         - !Ref WorkerNodesInstanceType
       AmiType: AL2_x86_64
+      RemoteAccess:
+        Ec2SshKey: !Ref KeyPairName
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access to worker nodes
+    Default: ""
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair
+
+  EksConfigFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ClusterName}-config-function"
+      Runtime: python3.9
+      Handler: index.handler
+      Role: !GetAtt EksConfigLambdaRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import base64
+          import cfnresponse
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              try:
+                  logger.info(f"Event: {json.dumps(event)}")
+
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  cluster_name = event['ResourceProperties']['ClusterName']
+                  node_instance_role_arn = event['ResourceProperties']['NodeInstanceRoleArn']
+                  region = event['ResourceProperties']['Region']
+                  additional_users = event['ResourceProperties'].get('AdditionalUsers', [])
+                  additional_roles = event['ResourceProperties'].get('AdditionalRoles', [])
+
+                  mapRoles = [
+                      {
+                          'rolearn': node_instance_role_arn,
+                          'username': 'system:node:{{EC2PrivateDNSName}}',
+                          'groups': ['system:bootstrappers', 'system:nodes']
+                      }
+                  ]
+
+                  mapUsers = []
+
+                  for role in additional_roles:
+                      if role:
+                          mapRoles.append({
+                              'rolearn': role,
+                              'username': role.split('/')[-1],
+                              'groups': ['system:masters']
+                          })
+
+                  for user in additional_users:
+                      if user:
+                          mapUsers.append({
+                              'userarn': user,
+                              'username': user.split('/')[-1],
+                              'groups': ['system:masters']
+                          })
+
+                  logger.info("aws-auth configuration prepared successfully")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'Message': 'aws-auth configuration created',
+                      'MapRoles': json.dumps(mapRoles),
+                      'MapUsers': json.dumps(mapUsers)
+                  })
+
+              except Exception as e:
+                  logger.error(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e)
+                  })
+
+  EksConfigResource:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: EksNodeGroup
+    Properties:
+      ServiceToken: !GetAtt EksConfigFunction.Arn
+      ClusterName: !Ref ClusterName
+      NodeInstanceRoleArn: !GetAtt EksNodeRole.Arn
+      Region: !Ref AWS::Region
+      AdditionalUsers:
+        - !If [HasAdditionalUser, !Ref AdditionalUserArn, ""]
+      AdditionalRoles:
+        - !If [HasEC2Role, !Ref EC2InstanceRoleArn, ""]
+        - !If [HasAdminRole, !Ref AdminRoleArn, ""]
 
 Outputs:
+
   VPCId:
     Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC-ID"
+
   EKSClusterName:
     Value: !Ref ClusterName
+    Export:
+      Name: !Sub "${AWS::StackName}-EKS-Cluster-Name"
+
+  EKSClusterArn:
+    Value: !GetAtt EksCluster.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EKS-Cluster-Arn"
+
+  EKSClusterEndpoint:
+    Value: !GetAtt EksCluster.Endpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-EKS-Cluster-Endpoint"
+
   PublicSubnets:
     Value: !Join [",", [!Ref PublicSubnet1, !Ref PublicSubnet2]]
+    Export:
+      Name: !Sub "${AWS::StackName}-Public-Subnets"
+
   PrivateSubnets:
     Value: !Join [",", [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
+    Export:
+      Name: !Sub "${AWS::StackName}-Private-Subnets"
+
   NodeGroupName:
     Value: !Ref EksNodeGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-NodeGroup-Name"
+
+  EKSClusterRoleArn:
+    Value: !GetAtt EksRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EKS-Cluster-Role-Arn"
+
+  EKSNodeRoleArn:
+    Value: !GetAtt EksNodeRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EKS-Node-Role-Arn"
+
+  KubectlInstructions:
+    Value: !Sub |
+      To access this EKS cluster, run:
+      aws eks update-kubeconfig --region ${AWS::Region} --name ${ClusterName}
+
+      If you provided additional user/role ARNs, they should have access.
+      Otherwise, only the AWS identity that created this stack has access.
+    Export:
+      Name: !Sub "${AWS::StackName}-Access-Instructions"
