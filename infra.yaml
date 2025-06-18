@@ -22,7 +22,7 @@ Parameters:
     Default: my-eks-cluster
   KubernetesVersion:
     Type: String
-    Default: 1.22
+    Default: 1.32
   NumberOfWorkerNodes:
     Type: Number
     Default: 2
