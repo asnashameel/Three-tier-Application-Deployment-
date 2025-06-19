@@ -1,33 +1,52 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Three Tier Architecture with VPC, Subnets, NAT, IGW, Route Tables, Security Groups, IAM, EKS Cluster, and NodeGroup
+
 Parameters:
   VpcCIDR:
     Type: String
     Default: 10.0.0.0/16
+    Description: CIDR block for the VPC.
   PublicSubnet1CIDR:
     Type: String
     Default: 10.0.1.0/24
+    Description: CIDR block for the first public subnet.
   PublicSubnet2CIDR:
     Type: String
     Default: 10.0.2.0/24
+    Description: CIDR block for the second public subnet.
   PrivateSubnet1CIDR:
     Type: String
     Default: 10.0.3.0/24
+    Description: CIDR block for the first private subnet.
   PrivateSubnet2CIDR:
     Type: String
     Default: 10.0.4.0/24
-  ClusterName:
+    Description: CIDR block for the second private subnet.
+  EKSClusterName:
     Type: String
-    Default: my-eks-cluster
+    Default: MyEKSCluster
+    Description: Name for the EKS Cluster.
   KubernetesVersion:
     Type: String
-    # Updated to a common supported version.
-    # ALWAYS VERIFY current supported EKS versions: https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html
-    Default: 1.29
-  NumberOfWorkerNodes:
+    Default: 1.32 # Changed to a commonly supported EKS Kubernetes version. Please verify current supported versions from AWS EKS documentation.
+    Description: The Kubernetes version for the EKS cluster.
+  EKSMinSize:
+    Type: Number
+    Default: 1
+    Description: Minimum number of instances in the EKS Node Group.
+  EKSDesiredSize:
     Type: Number
     Default: 2
+    Description: Desired number of instances in the EKS Node Group.
+  EKSMaxSize:
+    Type: Number
+    Default: 4
+    Description: Maximum number of instances in the EKS Node Group.
   WorkerNodesInstanceType:
     Type: String
     Default: t3.medium
+    Description: EC2 instance type for the EKS worker nodes.
 
 Resources:
 
@@ -39,10 +58,14 @@ Resources:
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: ThreeTierVPC
+          Value: !Sub ${AWS::StackName}-ThreeTierVPC
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-InternetGateway
 
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -59,7 +82,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: PublicSubnet1
+          Value: !Sub ${AWS::StackName}-PublicSubnet1
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -70,7 +93,7 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: PublicSubnet2
+          Value: !Sub ${AWS::StackName}-PublicSubnet2
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -80,7 +103,7 @@ Resources:
       AvailabilityZone: !Select [0, !GetAZs '']
       Tags:
         - Key: Name
-          Value: PrivateSubnet1
+          Value: !Sub ${AWS::StackName}-PrivateSubnet1
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -90,12 +113,15 @@ Resources:
       AvailabilityZone: !Select [1, !GetAZs '']
       Tags:
         - Key: Name
-          Value: PrivateSubnet2
+          Value: !Sub ${AWS::StackName}-PrivateSubnet2
 
   NatEIP:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-NatEIP
 
   NATGateway:
     Type: AWS::EC2::NatGateway
@@ -104,12 +130,15 @@ Resources:
       SubnetId: !Ref PublicSubnet1
       Tags:
         - Key: Name
-          Value: NATGateway
+          Value: !Sub ${AWS::StackName}-NATGateway
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PublicRouteTable
 
   PublicRoute:
     Type: AWS::EC2::Route
@@ -135,6 +164,9 @@ Resources:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-PrivateRouteTable
 
   PrivateRoute:
     Type: AWS::EC2::Route
@@ -155,78 +187,175 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-  EksRole:
+  # IAM Role for EKS Cluster Control Plane
+  EKSClusterRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: my.eks.cluster.role
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
               Service: eks.amazonaws.com
             Action: sts:AssumeRole
-      Path: /
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKSVPCResourceController # Recommended for EKS clusters
+      RoleName: !Sub ${AWS::StackName}-EKSClusterRole
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-EKSClusterRole
 
-  EksNodeRole:
+  # Security Group for EKS Worker Nodes
+  SecurityGroupEKSWorkers:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EKS worker nodes
+      VpcId: !Ref VPC # Use !Ref VPC for consistency
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-EKSWorkersSG
+
+  # Ingress rules for EKS Worker Security Group
+  # Allows communication from EKS Control Plane to worker nodes (typically TCP 443)
+  SGEKSWorkersIngressControlPlane:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt SecurityGroupEKSWorkers.GroupId
+      SourceSecurityGroupId: !GetAtt MyEKSCluster.ClusterSecurityGroupId # EKS creates a security group for the control plane
+      IpProtocol: tcp
+      FromPort: 1025 # Kubelet to API Server (various ports)
+      ToPort: 65535 # Broad range for internal cluster communication (adjust as needed)
+      Description: Allow EKS Control Plane to communicate with Worker Nodes
+
+  # Allows worker nodes to communicate with each other
+  SGEKSWorkersIngressSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt SecurityGroupEKSWorkers.GroupId
+      SourceSecurityGroupId: !GetAtt SecurityGroupEKSWorkers.GroupId # Self-referencing
+      IpProtocol: -1 # All traffic
+      Description: Allow Worker Nodes to communicate with each other
+
+  # Allow inbound HTTP/HTTPS from public (for Load Balancers pointing to nodes, if any)
+  # This might need to be adjusted based on actual application requirements
+  SGEKSWorkersIngressHTTP:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt SecurityGroupEKSWorkers.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0 # Allow from anywhere
+      Description: Allow HTTP traffic to worker nodes
+
+  SGEKSWorkersIngressHTTPS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt SecurityGroupEKSWorkers.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0 # Allow from anywhere
+      Description: Allow HTTPS traffic to worker nodes
+
+  # Egress rules for EKS Worker Security Group
+  SGEKSWorkersEgressAll:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt SecurityGroupEKSWorkers.GroupId
+      IpProtocol: -1 # All protocols
+      CidrIp: 0.0.0.0/0 # All outbound traffic
+      Description: Allow all outbound traffic from Worker Nodes
+
+  # EKS Cluster Resource
+  MyEKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref EKSClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PublicSubnet1
+          - !Ref PublicSubnet2
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !GetAtt SecurityGroupEKSWorkers.GroupId
+        # EndpointPrivateAccess: false # Default
+        EndpointPublicAccess: true   # Default
+        #PublicAccessCidrs: # Optionally restrict public endpoint access
+        #  - 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-EKSCluster
+
+  # IAM Role for EKS Node Group (Worker Nodes)
+  MyEKSNodegroupRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: my.eks.node.role
       AssumeRolePolicyDocument:
-        Version: "2012-10-17"
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
-      Path: /
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-        - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-        - "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      RoleName: !Sub ${AWS::StackName}-EKSNodegroupRole
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-EKSNodegroupRole
 
-  EksCluster:
-    Type: AWS::EKS::Cluster
-    Properties:
-      Name: !Ref ClusterName
-      Version: !Ref KubernetesVersion
-      RoleArn: !GetAtt EksRole.Arn
-      ResourcesVpcConfig:
-        SubnetIds:
-          # EKS recommends private subnets for cluster communication if possible
-          - !Ref PrivateSubnet1
-          - !Ref PrivateSubnet2
-        EndpointPrivateAccess: false # Keep false for public endpoint access
-        EndpointPublicAccess: true   # Keep true to access from internet
-
-  EksNodeGroup:
+  # EKS Node Group Resource
+  MyNodeGroup:
     Type: AWS::EKS::Nodegroup
-    DependsOn: EksCluster
+    DependsOn: MyEKSCluster # Ensure cluster is created before nodegroup
     Properties:
-      ClusterName: !Ref ClusterName
-      NodeRole: !GetAtt EksNodeRole.Arn
+      ClusterName: !Ref MyEKSCluster
+      NodeRole: !GetAtt MyEKSNodegroupRole.Arn
       Subnets:
-        # Worker nodes typically deployed into private subnets for better security
-        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet1 # Worker nodes typically in private subnets
         - !Ref PrivateSubnet2
       ScalingConfig:
-        MinSize: !Ref NumberOfWorkerNodes
-        DesiredSize: !Ref NumberOfWorkerNodes
-        MaxSize: !Ref NumberOfWorkerNodes
+        MinSize: !Ref EKSMinSize
+        DesiredSize: !Ref EKSDesiredSize
+        MaxSize: !Ref EKSMaxSize
       InstanceTypes:
         - !Ref WorkerNodesInstanceType
-      AmiType: AL2_x86_64 # Ensure this is compatible with your KubernetesVersion
+      AmiType: AL2_x86_64 # Ensure this AMI type is compatible with your KubernetesVersion
+      NodegroupName: !Sub ${AWS::StackName}-ThreeTierNodeGroup
+      Labels:
+        app: my-app # Example label
+      Tags:
+        Name: !Sub ${AWS::StackName}-EKSNodeGroup # Note: Tags here are applied to the Auto Scaling Group, not directly to instances
 
 Outputs:
   VPCId:
+    Description: The ID of the created VPC.
     Value: !Ref VPC
   EKSClusterName:
-    Value: !Ref ClusterName
+    Description: The name of the EKS Cluster.
+    Value: !Ref EKSClusterName # Changed to EKSClusterName parameter
   PublicSubnets:
+    Description: Comma-separated list of Public Subnet IDs.
     Value: !Join [",", [!Ref PublicSubnet1, !Ref PublicSubnet2]]
   PrivateSubnets:
+    Description: Comma-separated list of Private Subnet IDs.
     Value: !Join [",", [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
-  NodeGroupName:
-    Value: !Ref EksNodeGroup
+  EKSNodeGroupName:
+    Description: The name of the EKS Node Group.
+    Value: !Ref MyNodeGroup # Changed to MyNodeGroup
+  EKSClusterRoleArn:
+    Description: ARN of the IAM Role for the EKS Cluster.
+    Value: !GetAtt EKSClusterRole.Arn
+  EKSNodeRoleArn:
+    Description: ARN of the IAM Role for the EKS Node Group.
+    Value: !GetAtt MyEKSNodegroupRole.Arn
+  EKSWorkerSecurityGroupId:
+    Description: Security Group ID for the EKS Worker Nodes.
+    Value: !GetAtt SecurityGroupEKSWorkers.GroupId
