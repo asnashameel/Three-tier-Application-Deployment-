@@ -5,7 +5,7 @@ env:
     CLUSTER_NAME: three-tier-cluster
     REGION: us-east-1
     ACCOUNT_ID: 207567798584
-    FRONTEND_REPO: 3-tier-frontend
+    #FRONTEND_REPO: 3-tier-frontend
     BACKEND_REPO: 3-tier-backend
     FRONTEND_DIR: frontend
     BACKEND_DIR: backend
